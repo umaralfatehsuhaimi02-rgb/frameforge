@@ -1,13 +1,32 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod capture;
+mod config;
+mod controller;
+mod cursor;
+mod engine;
+mod gfx;
+mod gui;
+mod winutil;
+
 use eframe::egui;
-use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, time::{Duration, Instant}};
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)] enum ScaleMode { Auto, Integer, Fsr, Nis, Xess, Bilinear }
-impl ScaleMode { fn label(self)->&'static str { match self { Self::Auto=>"Auto",Self::Integer=>"Integer",Self::Fsr=>"AMD FSR",Self::Nis=>"NVIDIA NIS",Self::Xess=>"Intel XeSS",Self::Bilinear=>"Bilinear" } } }
-#[derive(Clone, Serialize, Deserialize)] struct Profile { name:String, scale:ScaleMode, multiplier:f32, frame_limit:u32, vsync:bool, hdr:bool, low_latency:bool, capture_cursor:bool }
-impl Default for Profile { fn default()->Self { Self{name:"Default".into(),scale:ScaleMode::Auto,multiplier:2.0,frame_limit:0,vsync:false,hdr:false,low_latency:true,capture_cursor:false} } }
-struct FrameForge { profile:Profile, profiles:Vec<Profile>, selected:usize, running:bool, fps:f32, frame_time:f32, last_tick:Instant, status:String, advanced:bool }
-impl FrameForge { fn path()->PathBuf { std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(||PathBuf::from(".")).join("FrameForge").join("profiles.json") } fn load()->Vec<Profile> { fs::read_to_string(Self::path()).ok().and_then(|s|serde_json::from_str(&s).ok()).unwrap_or_else(||vec![Profile::default()]) } fn save(&self){let p=Self::path();if let Some(x)=p.parent(){let _=fs::create_dir_all(x);}let _=fs::write(p,serde_json::to_string_pretty(&self.profiles).unwrap());} }
-impl Default for FrameForge { fn default()->Self { let p=Self::load();Self{profile:p[0].clone(),profiles:p,selected:0,running:false,fps:0.0,frame_time:0.0,last_tick:Instant::now(),status:"Ready. Select a game window to begin.".into(),advanced:false} } }
-impl eframe::App for FrameForge { fn update(&mut self,ctx:&egui::Context,_:&mut eframe::Frame){let dt=self.last_tick.elapsed().as_secs_f32();self.last_tick=Instant::now();if self.running{self.fps=if dt>0.0{1.0/dt}else{0.0};self.frame_time=dt*1000.0;}egui::TopBottomPanel::top("top").show(ctx,|ui|{ui.horizontal(|ui|{ui.heading("FrameForge");ui.label("open frame pacing + scaling toolkit");ui.separator();ui.label(if self.running{"● LIVE"}else{"○ IDLE"});});});egui::SidePanel::left("nav").resizable(false).show(ctx,|ui|{ui.heading("Profiles");for(i,p)in self.profiles.iter().enumerate(){if ui.selectable_label(self.selected==i,&p.name).clicked(){self.selected=i;self.profile=p.clone();}}if ui.button("＋ New profile").clicked(){let mut p=Profile::default();p.name=format!("Profile {}",self.profiles.len()+1);self.profiles.push(p);self.selected=self.profiles.len()-1;self.profile=self.profiles[self.selected].clone();}ui.separator();ui.label("Hotkeys");ui.monospace("F9  Toggle scaling\nF10 Toggle capture\nF11 Overlay");ui.separator();ui.label("Backend");ui.small("Windows Graphics Capture\nDXGI frame pacing\nGPU compute shaders");});egui::CentralPanel::default().show(ctx,|ui|{ui.horizontal(|ui|{ui.heading("Scaling session");if ui.button(if self.running{"Stop session"}else{"Start session"}).clicked(){self.running=!self.running;self.status=if self.running{"Session started with low-latency scheduling.".into()}else{"Session stopped.".into()};}});ui.separator();egui::Grid::new("settings").num_columns(2).spacing([24.0,12.0]).show(ui,|ui|{ui.label("Scaling method");egui::ComboBox::from_id_salt("scale").selected_text(self.profile.scale.label()).show_ui(ui,|ui|{for m in[ScaleMode::Auto,ScaleMode::Integer,ScaleMode::Fsr,ScaleMode::Nis,ScaleMode::Xess,ScaleMode::Bilinear]{ui.selectable_value(&mut self.profile.scale,m,m.label());}});ui.end_row();ui.label("Scale multiplier");ui.add(egui::Slider::new(&mut self.profile.multiplier,1.0..=4.0).suffix("x"));ui.end_row();ui.label("Frame limit");ui.add(egui::Slider::new(&mut self.profile.frame_limit,0..=500).suffix(" FPS (0 = uncapped)"));ui.end_row();ui.label("VSync");ui.checkbox(&mut self.profile.vsync,"Synchronize output");ui.end_row();ui.label("HDR passthrough");ui.checkbox(&mut self.profile.hdr,"Preserve HDR when supported");ui.end_row();ui.label("Low-latency mode");ui.checkbox(&mut self.profile.low_latency,"Prefer just-in-time presentation");ui.end_row();ui.label("Cursor capture");ui.checkbox(&mut self.profile.capture_cursor,"Include cursor in captured frame");ui.end_row();});ui.separator();ui.collapsing("Advanced",|ui|{ui.checkbox(&mut self.advanced,"Show experimental controls");if self.advanced{ui.label("Future: Vulkan interop, frame generation, per-game shader chains, scanline sync.");ui.label("FrameForge never injects into game processes.");}});ui.separator();ui.horizontal(|ui|{ui.label(format!("FPS: {:.0}",self.fps));ui.separator();ui.label(format!("Frame time: {:.2} ms",self.frame_time));ui.separator();ui.label("Dropped: 0");});ui.add_space(8.0);ui.colored_label(egui::Color32::from_rgb(120,190,255),&self.status);ui.with_layout(egui::Layout::bottom_up(egui::Align::RIGHT),|ui|{ui.horizontal(|ui|{if ui.button("Save profile").clicked(){self.profiles[self.selected]=self.profile.clone();self.save();self.status="Profile saved.".into();}if ui.button("Apply").clicked(){self.profiles[self.selected]=self.profile.clone();self.status="Profile applied. Capture backend ready.".into();}});});});ctx.request_repaint_after(Duration::from_millis(16));} }
-fn main()->eframe::Result{let o=eframe::NativeOptions{viewport:egui::ViewportBuilder::default().with_inner_size([980.0,640.0]).with_min_inner_size([780.0,520.0]),..Default::default()};eframe::run_native("FrameForge",o,Box::new(|_|Ok(Box::new(FrameForge::default()))))}
+use windows::Win32::Media::timeBeginPeriod;
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+
+fn main() -> eframe::Result {
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _ = timeBeginPeriod(1);
+    }
+    let ctl = controller::Controller::new();
+    ctl.spawn_hotkey_thread();
+    ctl.spawn_autoscale_thread();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("FrameForge")
+            .with_inner_size([640.0, 760.0])
+            .with_min_inner_size([520.0, 520.0]),
+        ..Default::default()
+    };
+    eframe::run_native("FrameForge", options, Box::new(move |_cc| Ok(Box::new(gui::App::new(ctl)))))
+}
