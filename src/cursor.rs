@@ -2,7 +2,7 @@
 //! the pointer where the user sees it. Runs on its own thread with a low-level mouse hook.
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread::JoinHandle;
-use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -94,7 +94,7 @@ pub fn start() -> CursorHook {
     let handle = std::thread::spawn(move || unsafe {
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         let _ = tx.send(GetCurrentThreadId());
-        let hinst = GetModuleHandleW(None).map(|m| m.into()).unwrap_or_default();
+        let hinst: HINSTANCE = GetModuleHandleW(None).map(|m| m.into()).unwrap_or_default();
         let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hinst, 0);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
